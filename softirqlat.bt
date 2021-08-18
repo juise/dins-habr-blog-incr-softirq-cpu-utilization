@@ -1,0 +1,121 @@
+#!/usr/bin/env bpftrace
+
+BEGIN
+{
+    printf("Tracing latencies of\n");
+    printf(" __do_softirq\n");
+    printf("     |- net_rx_action\n");
+    printf("         |- vmxnet3_poll_rx_only\n");
+    printf("         |- net_rps_send_ipi\n");
+    printf("         |- process_backlog\n\n");
+
+    @is_target_cpu[0] = true;
+    @is_target_cpu[1] = true;
+    @is_target_cpu[2] = true;
+    @is_target_cpu[3] = true;
+
+    $cpu = 0;
+    unroll(4) {
+        @rt_usec___do_softirq[$cpu] = 0;
+        @rt_usec_net_rx_action[$cpu] = 0;
+        @rt_usec_net_rps_send_ipi[$cpu] = 0;
+        @rt_usec_process_backlog[$cpu] = 0;
+        @rt_usec_vmxnet3_poll_rx_only[$cpu] = 0;  
+    
+        @pkts_received[$cpu] = 0;
+        @pkts_processed[$cpu] = 0;
+
+        $cpu = $cpu + 1;
+    }
+}
+
+kprobe:__do_softirq /@is_target_cpu[cpu]/
+{
+    @start___do_softirq[cpu,tid] = nsecs;
+}
+
+kretprobe:__do_softirq /@is_target_cpu[cpu] && @start___do_softirq[cpu,tid]/
+{
+    @rt_usec___do_softirq[cpu] = @rt_usec___do_softirq[cpu] + (int64)((nsecs - @start___do_softirq[cpu,tid]) / 1000);
+    delete(@start___do_softirq[cpu,tid]);
+}
+
+kprobe:net_rx_action /@is_target_cpu[cpu]/
+{
+    @start_net_rx_action[cpu,tid] = nsecs;
+}
+
+kretprobe:net_rx_action /@is_target_cpu[cpu] && @start_net_rx_action[cpu,tid]/
+{
+    @rt_usec_net_rx_action[cpu] = @rt_usec_net_rx_action[cpu] + (int64)((nsecs - @start_net_rx_action[cpu,tid]) / 1000);
+    delete(@start_net_rx_action[cpu,tid]);
+}
+
+kprobe:net_rps_send_ipi /@is_target_cpu[cpu]/
+{
+    @start_net_rps_send_ipi[cpu,tid] = nsecs;
+}
+
+kretprobe:net_rps_send_ipi /@is_target_cpu[cpu] && @start_net_rps_send_ipi[cpu,tid]/
+{
+    @rt_usec_net_rps_send_ipi[cpu] = @rt_usec_net_rps_send_ipi[cpu] + (int64)((nsecs - @start_net_rps_send_ipi[cpu,tid]) / 1000);
+    delete(@start_net_rps_send_ipi[cpu,tid]);
+}
+
+kprobe:process_backlog /@is_target_cpu[cpu]/
+{
+    @start_process_backlog[cpu,tid] = nsecs;
+}
+
+kretprobe:process_backlog /@is_target_cpu[cpu] && @start_process_backlog[cpu,tid]/
+{
+    @rt_usec_process_backlog[cpu] = @rt_usec_process_backlog[cpu] + (int64)((nsecs - @start_process_backlog[cpu,tid]) / 1000);
+    delete(@start_process_backlog[cpu,tid]);
+
+    @pkts_processed[cpu] = @pkts_processed[cpu] + (int64)retval;
+}
+
+kprobe:vmxnet3_poll_rx_only /@is_target_cpu[cpu]/
+{
+    @start_vmxnet3_poll_rx_only[cpu,tid] = nsecs;
+}
+
+kretprobe:vmxnet3_poll_rx_only /@is_target_cpu[cpu] && @start_vmxnet3_poll_rx_only[cpu,tid]/
+{
+    @rt_usec_vmxnet3_poll_rx_only[cpu] = @rt_usec_vmxnet3_poll_rx_only[cpu] + (int64)((nsecs - @start_vmxnet3_poll_rx_only[cpu,tid]) / 1000);
+    delete(@start_vmxnet3_poll_rx_only[cpu,tid]);
+
+    @pkts_received[cpu] = @pkts_received[cpu] + (int64)retval;
+}
+
+END
+{
+    $cpu = 0;
+    unroll(4) {
+        printf("CPU CORE %d\n", $cpu);
+        printf(" __do_softirq (self %d usecs, child %d usecs)\n", @rt_usec___do_softirq[$cpu], @rt_usec_net_rx_action[$cpu]);
+        printf("     |- net_rx_action (self %d usecs, child %d usecs)\n", @rt_usec_net_rx_action[$cpu], (@rt_usec_net_rps_send_ipi[$cpu] + @rt_usec_process_backlog[$cpu] + @rt_usec_vmxnet3_poll_rx_only[$cpu]));
+        printf("         |- vmxnet3_poll_rx_only (self %d usecs, pkts received %d)\n", @rt_usec_vmxnet3_poll_rx_only[$cpu], @pkts_received[$cpu]);
+        printf("         |- net_rps_send_ipi (self %d usecs)\n", @rt_usec_net_rps_send_ipi[$cpu]);
+        printf("         |- process_backlog (self %d usecs, pkts processes %d)\n", @rt_usec_process_backlog[$cpu], @pkts_processed[$cpu]);
+
+        $cpu = $cpu + 1;
+    }
+
+    clear(@is_target_cpu);
+ 
+    clear(@start___do_softirq);
+    clear(@start_net_rx_action);
+    clear(@start_net_rps_send_ipi);
+    clear(@start_process_backlog);
+    clear(@start_vmxnet3_poll_rx_only);
+
+    clear(@rt_usec___do_softirq);
+    clear(@rt_usec_net_rx_action);
+    clear(@rt_usec_net_rps_send_ipi);
+    clear(@rt_usec_process_backlog);
+    clear(@rt_usec_vmxnet3_poll_rx_only);
+
+    clear(@pkts_received);
+    clear(@pkts_processed);
+}
